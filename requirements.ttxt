@@ -1,16 +1,54 @@
-OpenCV-python
-Mediapipe
-NumPy
-Pillow
-PyAutoGUI
-PyTesseract
-Pyttsx3
-SpeechRecognition
-PyAudio
-Transformers
-Torch
-LangChain
-ChromaDB
-FastAPI
-Uvicorn
-python-dotenv
+import sys
+import signal
+import logging
+from logger_hub import logger_hub  # Integrated Logging
+from vision_engine import JarvisVisionEngine  # Integrated Vision
+from secure_vault import MohammadVaultEngine  # Integrated Banking
+
+class JarvisMainframe:
+    """
+    Unified Jarvis Core: Orchestrates Vision, Security, and Intelligence.
+    """
+    def __init__(self):
+        self.vision = JarvisVisionEngine()
+        self.vault = MohammadVaultEngine()
+        self.running = True
+        
+        # Signal handling for safety
+        signal.signal(signal.SIGINT, self.shutdown)
+        signal.signal(signal.SIGTERM, self.shutdown)
+
+    def start(self):
+        logger_hub.system.info("Jarvis Core Mainframe Online.")
+        try:
+            # Example: Run Vision analysis as a core background service
+            self.vision.run_realtime_analysis()
+        except Exception as e:
+            logger_hub.error.critical(f"System Critical Failure: {e}")
+            self.shutdown()
+
+    def shutdown(self, *args):
+        logger_hub.system.info("Graceful shutdown initiated.")
+        self.running = False
+        sys.exit(0)
+
+if __name__ == "__main__":
+    mainframe = JarvisMainframe()
+    mainframe.start()
+# AI & Vision
+opencv-python-headless>=4.8.0.74
+mediapipe>=0.10.7
+torch>=2.0.0
+transformers>=4.35.0
+deepface>=0.0.75
+
+# Backend & Automation
+fastapi>=0.104.0
+pyautogui>=0.9.54
+pytesseract>=0.3.10
+langchain>=0.1.0
+chromadb>=0.4.0
+
+# Security & Utilities
+cryptography>=41.0.0
+python-dotenv>=1.0.0
