@@ -1,8 +1,12 @@
 import os
 import sys
 import re
+import json
 import logging
 import requests
+from urllib.parse import urlparse
+import ipaddress
+import socket
 from typing import Dict, Any, Optional
 
 # Programmatic Git Library Import with fail-safe error handling
@@ -21,6 +25,10 @@ logging.basicConfig(
         logging.FileHandler("jarvis_terminal_executor.log", encoding="utf-8")
     ]
 )
+
+class SecurityError(Exception):
+    """Custom exception raised when structural execution violates core guardrails."""
+    pass
 
 # =====================================================================
 #             MODULE 1: AUTO-GIT COMMIT AGENT (SECURE CORE)
@@ -48,27 +56,31 @@ class JarvisGitAgent:
             logging.critical(f"[Git Agent] Initialization Exception: {str(e)}")
 
     def commit_and_push_updates(self, commit_message: str, branch_name: str = "main") -> bool:
-        """
-        Tracks all modified files, signs off a sanitized commit message,
-        and pushes to the designated secure remote upstream.
-        """
+        """Tracks modified files, sanitizes commit messages, and pushes upstream securely."""
         if not self.repo:
             logging.error("[Git Agent] Action aborted: Repository connection is offline.")
             return False
 
         try:
-            # 1. Sanitize commit message to remove unwanted control sequences
-            clean_message = re.sub(r'[\r\n`"\'$]', '', commit_message).strip()
-            if not clean_message:
-                clean_message = "Jarvis Auto-Commit: Maintenance and optimizations."
-
-            # 2. Programmatically verify changed or untracked file status
+            # 1. Programmatically verify changed or untracked file status first
             if not self.repo.is_dirty(untracked_files=True):
                 logging.info("[Git Agent] Clean state. No modified files detected for stage.")
                 return True
 
+            # 2. Strict Sanitize Commit Message
+            # Remove control sequences, quotes, backslashes, and prevent leading dashes (Flag Injection)
+            clean_message = re.sub(r'[\r\n`"\'$\\;]', '', commit_message).strip()
+            clean_message = clean_message.lstrip('-') 
+            
+            if not clean_message:
+                clean_message = "Jarvis Auto-Commit: Maintenance and optimizations."
+
+            # Strict branch validation to prevent Ref hijacking / Command injection via branch name
+            if not re.match(r'^[a-zA-Z0-9_\-\./]+$', branch_name):
+                raise SecurityError(f"Invalid branch name pattern: {branch_name}")
+
             logging.info("[Git Agent] Staging modified and untracked changes...")
-            self.repo.git.add(A=True)  # Programmatic stage equivalent to 'git add -A'
+            self.repo.git.add(A=True) 
 
             # 3. Perform commit
             logging.info(f"[Git Agent] Executing commit: '{clean_message}'")
@@ -80,17 +92,20 @@ class JarvisGitAgent:
             origin = self.repo.remote(name="origin")
             
             # Explicit refspec tracking ensures exact push target and prevents branch hijacking
-            push_info_list = origin.push(refspec=f"{branch_name}:{branch_name}")
+            push_info_list = origin.push(refspec=f"refs/heads/{branch_name}:refs/heads/{branch_name}")
             
             # Evaluate remote push feedback codes
             for push_info in push_info_list:
                 if push_info.flags & git.remote.PushInfo.ERROR:
-                    logging.error(f"[Git Agent] Push Rejected or Failed. Flag status: {push_info.flags}")
+                    logging.error(f"[Git Agent] Push Rejected or Failed. Summary: {push_info.summary}")
                     return False
 
             logging.info("[Git Agent] Upstream sync accomplished without errors.")
             return True
 
+        except SecurityError as sec_err:
+            logging.critical(f"[Git Agent] Security Restriction: {sec_err}")
+            return False
         except git.GitCommandError as git_err:
             logging.error(f"[Git Agent] Git command engine error: {git_err.stderr or git_err}")
             return False
@@ -105,41 +120,59 @@ class JarvisGitAgent:
 class JarvisAPIGenerator:
     """
     Constructs and executes REST API requests safely. Bypasses curl command-line
-    utility execution to guarantee sandbox-level application protection.
+    utility execution and prevents SSRF vulnerabilities.
     """
     def __init__(self):
-        # Whitelisted dynamic HTTP Request methods
         self.allowed_methods = {"GET", "POST", "PUT", "DELETE"}
+        self.session = requests.Session() # Reuse connection pools securely
 
     def validate_url(self, url: str) -> str:
-        """Enforces strictly secure HTTP protocol layers to prevent external exploits."""
+        """Enforces strictly secure HTTPS layers and blocks SSRF (Local/Private IPs)."""
         clean_url = url.strip()
-        if not clean_url.startswith("https://"):
+        parsed_url = urlparse(clean_url)
+
+        if parsed_url.scheme != "https":
             raise SecurityError("Unsafe protocol detected! This system operates on 'https://' only.")
+        
+        hostname = parsed_url.hostname
+        if not hostname:
+            raise SecurityError("Invalid URL target endpoint.")
+
+        # Prevent SSRF (Server-Side Request Forgery) by resolving IP and blocking private ranges
+        try:
+            ip_address_resolved = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(ip_address_resolved)
+            
+            if ip_obj.is_private or ip_obj.is_loopback:
+                raise SecurityError(f"Access to private/local network blocked: {ip_address_resolved}")
+        except socket.gaierror:
+            raise SecurityError(f"Could not resolve domain host: {hostname}")
+        except ValueError:
+            raise SecurityError("Invalid IP structure detected during resolution.")
+
         return clean_url
 
     def execute_api_call(self, method: str, url: str, payload: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None) -> Optional[requests.Response]:
         """Runs the programmatically assembled API request inside a strict safety sandbox."""
         upper_method = method.upper()
         if upper_method not in self.allowed_methods:
-            logging.error(f"[API Core] Blocked: Request method '{upper_method}' is not in the security whitelist.")
+            logging.error(f"[API Core] Blocked: Request method '{upper_method}' is not allowed.")
             return None
 
         try:
             secure_url = self.validate_url(url)
             logging.info(f"[API Core] Safely calling API [{upper_method}] to resource: {secure_url}")
 
-            # Enforce 10-second request timeout to prevent system hung threads/resource lockups
-            if upper_method == "GET":
-                response = requests.get(secure_url, headers=headers, params=payload, timeout=10)
-            elif upper_method == "POST":
-                response = requests.post(secure_url, headers=headers, json=payload, timeout=10)
-            elif upper_method == "PUT":
-                response = requests.put(secure_url, headers=headers, json=payload, timeout=10)
-            elif upper_method == "DELETE":
-                response = requests.delete(secure_url, headers=headers, timeout=10)
-            else:
-                return None
+            # Enforce explicit configurations (10s timeout, max 3 redirects to prevent loops)
+            response = self.session.request(
+                method=upper_method,
+                url=secure_url,
+                headers=headers,
+                json=payload if upper_method in {"POST", "PUT"} else None,
+                params=payload if upper_method == "GET" else None,
+                timeout=10,
+                allow_redirects=True
+            )
 
             logging.info(f"[API Core] Request complete. Response Code: {response.status_code}")
             return response
@@ -150,11 +183,6 @@ class JarvisAPIGenerator:
         except requests.exceptions.RequestException as req_err:
             logging.error(f"[API Core] Connection transmission error: {req_err}")
             return None
-
-
-class SecurityError(Exception):
-    """Custom exception raised when structural execution violates core guardrails."""
-    pass
 
 
 # =====================================================================
@@ -192,13 +220,12 @@ class JarvisTerminalPlatform:
             elif choice == '2':
                 method = input("\nHTTP Method (GET, POST, PUT, DELETE): ").strip()
                 url = input("Destination HTTPS Endpoint: ").strip()
-                headers_input = input("Enter Headers (JSON string format or leave empty): ").strip()
-                payload_input = input("Enter Payload Data (JSON string format or leave empty): ").strip()
+                headers_input = input("Enter Headers (JSON format or leave empty): ").strip()
+                payload_input = input("Enter Payload Data (JSON format or leave empty): ").strip()
 
                 headers = None
                 payload = None
 
-                # Convert inputs to JSON payloads safely
                 try:
                     if headers_input:
                         headers = json.loads(headers_input)
