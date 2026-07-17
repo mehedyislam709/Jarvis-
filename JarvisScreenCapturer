@@ -1,0 +1,65 @@
+import os
+import time
+from PIL import Image, ImageGrab
+import mss
+import mss.tools
+import pytesseract
+
+class JarvisVisionSystem:
+    def __init__(self, output_dir="jarvis_captures"):
+        """Initializes the Jarvis Screen Capture and OCR system."""
+        self.output_dir = output_dir
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        print(f"[Jarvis] Vision system initialized. Saving to: {self.output_dir}")
+
+    def capture_with_mss(self):
+        """Uses mss for ultra-fast screen capture (ideal for OCR feeds)."""
+        filename = os.path.join(self.output_dir, f"mss_snapshot_{int(time.time())}.png")
+        with mss.mss() as sct:
+            monitor = sct.monitors[1]
+            sct_img = sct.grab(monitor)
+            mss.tools.to_png(sct_img.rgb, sct_img.size, output=filename)
+        return filename
+
+    def perform_ocr(self, image_path):
+        """
+        Reads the image from the given path and extracts text using OCR.
+        """
+        print(f"[Jarvis] Scanning image for text via OCR: {image_path}")
+        try:
+            # Open the image file
+            img = Image.open(image_path)
+            
+            # Use PyTesseract to extract text
+            extracted_text = pytesseract.image_to_string(img)
+            
+            print("[Jarvis] OCR Scan complete.")
+            return extracted_text.strip()
+        except Exception as e:
+            print(f"[Jarvis] OCR Failed: {e}")
+            return ""
+
+    def scan_screen_now(self):
+        """Helper method to take a quick capture and instantly read the text on screen."""
+        # 1. Capture the screen quickly using mss
+        screenshot_file = self.capture_with_mss()
+        
+        # 2. Run OCR on that screenshot
+        text_found = self.perform_ocr(screenshot_file)
+        
+        return text_found
+
+# Execution Example
+if __name__ == "__main__":
+    # Initialize the expanded Jarvis vision system
+    jarvis_vision = JarvisVisionSystem()
+    
+    print("\n--- Starting Screen OCR Test ---")
+    # Take a screenshot and read what's on your screen right now
+    screen_text = jarvis_vision.scan_screen_now()
+    
+    print("\n[Jarvis] Text discovered on screen:")
+    print("-" * 40)
+    print(screen_text if screen_text else "[No readable text found]")
+    print("-" * 40)
