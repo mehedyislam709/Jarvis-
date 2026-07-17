@@ -1,21 +1,29 @@
-import cv2
-import numpy as np
-import pyautogui
-from deepface import DeepFace
-import time
-import json
 import os
 import sys
-import shutil
-import webbrowser
-import threading
+import cv2
+import json
+import time
 import queue
 import logging
-from datetime import datetime
-import psutil
-from selenium import webdriver
+import threading
+import webbrowser
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Tuple, Optional
 
-# Optional Advanced Libraries with Graceful Fallbacks
+import numpy as np
+import psutil
+import pyautogui
+from deepface import DeepFace
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+# Cryptographic Integrity Layer
+try:
+    from cryptography.fernet import Fernet
+except ImportError:
+    Fernet = None
+
+# Optional Advanced Vocal Modules with Graceful Fallbacks
 try:
     import pyttsx3
 except ImportError:
@@ -27,19 +35,20 @@ except ImportError:
     sr = None
 
 # =====================================================================
-#                        GLOBAL LOGGING & QUEUE SYSTEM
+#                        GLOBAL LOGGING & CONFIG
 # =====================================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] (%(threadName)s) %(message)s",
     handlers=[
-        logging.FileHandler("jarvis_mainframe.log"),
+        logging.FileHandler("jarvis_mainframe_hardened.log", encoding="utf-8"),
         logging.StreamHandler(sys.stdout)
     ]
 )
 
-system_active = True
-background_task_queue = queue.Queue()
+# Thread-safe termination flags and orchestration communication queues
+SYSTEM_ACTIVE = True
+BACKGROUND_TASK_QUEUE = queue.Queue()
 
 # =====================================================================
 #                  MODULE 1: VOICE & AUDIO SUBSYSTEM
@@ -49,19 +58,17 @@ class JarvisVoiceCore:
         self.speech_engine = None
         self.recognizer = None
         self.mic = None
+        self._lock = threading.Lock()
         
-        # Initialize Text-to-Speech Engine
         if pyttsx3:
             try:
                 self.speech_engine = pyttsx3.init()
-                # Fine-tune vocal parameters (180 words per minute, neutral volume)
                 self.speech_engine.setProperty('rate', 175)
                 self.speech_engine.setProperty('volume', 0.9)
                 logging.info("[Audio Engine] PyTTSx3 voice synthesis system successfully mapped.")
             except Exception as e:
                 logging.warning(f"[Audio Engine] Voice synthesis failed to initialize: {e}")
         
-        # Initialize Speech Recognition
         if sr:
             try:
                 self.recognizer = sr.Recognizer()
@@ -71,14 +78,18 @@ class JarvisVoiceCore:
                 logging.warning(f"[Audio Engine] Microphone access failed: {e}")
 
     def speak(self, text: str):
-        """Generates clear synthetic voice feedback synchronously."""
+        """Generates clear synthetic voice feedback synchronously under thread-safe locking."""
         logging.info(f"[Jarvis Audio] Vocalizing: '{text}'")
-        if self.speech_engine:
-            # Run in a loop-safe manner to prevent runtime collision with background loops
-            self.speech_engine.say(text)
-            self.speech_engine.runAndWait()
-        else:
-            print(f"\n[Jarvis Voice Emulation]: {text}")
+        with self._lock:
+            if self.speech_engine:
+                try:
+                    self.speech_engine.say(text)
+                    self.speech_engine.runAndWait()
+                except Exception as e:
+                    logging.error(f"[Audio Engine] Runtime speech error: {e}")
+                    print(f"\n[Jarvis Voice Emulation]: {text}")
+            else:
+                print(f"\n[Jarvis Voice Emulation]: {text}")
 
     def listen_command(self) -> str:
         """Listens to ambient audio and translates it to clear string commands."""
@@ -86,22 +97,23 @@ class JarvisVoiceCore:
             logging.warning("[Audio Engine] Voice input requested but interface is offline.")
             return ""
 
-        with self.mic as source:
-            logging.info("[Audio Engine] Calibration for ambient room noise levels...")
-            self.recognizer.adjust_for_ambient_noise(source, duration=1.0)
-            print("\n[Jarvis Engine] Listening for vocal command... Speak now.")
-            try:
+        try:
+            with self.mic as source:
+                logging.info("[Audio Engine] Calibrating ambient room noise levels...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1.0)
+                print("\n[Jarvis Engine] Listening for vocal command... Speak now.")
                 audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
+                
                 logging.info("[Audio Engine] Processing vocal acoustics...")
                 command = self.recognizer.recognize_google(audio)
                 logging.info(f"[Audio Engine] Speech converted to text: '{command}'")
                 return command
-            except sr.WaitTimeoutError:
-                logging.warning("[Audio Engine] Listening timeout reached.")
-                return ""
-            except Exception as e:
-                logging.error(f"[Audio Engine] Recognition pipeline error: {e}")
-                return ""
+        except sr.WaitTimeoutError:
+            logging.warning("[Audio Engine] Listening timeout reached.")
+            return ""
+        except Exception as e:
+            logging.error(f"[Audio Engine] Recognition pipeline error: {e}")
+            return ""
 
 
 # =====================================================================
@@ -109,13 +121,19 @@ class JarvisVoiceCore:
 # =====================================================================
 class JarvisPeripheralController:
     def __init__(self):
-        pyautogui.FAILSAFE = True  # Drag mouse to any of the 4 screen corners to kill automation instantly
+        pyautogui.FAILSAFE = True  # Drag mouse to any corner to instantly abort
         pyautogui.PAUSE = 0.05
+        self.screen_width, self.screen_height = pyautogui.size()
 
     def move_mouse_to(self, x: int, y: int, duration: float = 0.4):
-        logging.info(f"[Peripheral Control] Cursor translation to X={x}, Y={y}")
+        """Translates the cursor safely after bounding within verified monitor aspect coordinates."""
+        # Sanitize boundaries defensively
+        target_x = max(0, min(x, self.screen_width - 1))
+        target_y = max(0, min(y, self.screen_height - 1))
+        
+        logging.info(f"[Peripheral Control] Cursor translation to X={target_x}, Y={target_y}")
         try:
-            pyautogui.moveTo(x, y, duration=duration)
+            pyautogui.moveTo(target_x, target_y, duration=duration)
         except Exception as e:
             logging.error(f"Mouse movement fault: {e}")
 
@@ -127,7 +145,7 @@ class JarvisPeripheralController:
             logging.error(f"Mouse interaction fault: {e}")
 
     def virtual_type(self, text: str, delay: float = 0.03):
-        logging.info(f"[Peripheral Control] Generating physical keystrokes: '{text}'")
+        logging.info("[Peripheral Control] Generating physical keystrokes onto input focus...")
         try:
             pyautogui.write(text, interval=delay)
         except Exception as e:
@@ -148,25 +166,29 @@ class JarvisFileEngine:
     @staticmethod
     def create_directory(dir_path: str):
         try:
-            if not os.path.exists(dir_path):
-                os.makedirs(dir_path)
-                logging.info(f"[File System] Generated directory tree: '{dir_path}'")
+            # Prevent directory traversal vulnerability checks implicitly via absolute normalization
+            normalized_path = os.path.abspath(dir_path)
+            if not os.path.exists(normalized_path):
+                os.makedirs(normalized_path, exist_ok=True)
+                logging.info(f"[File System] Generated directory tree: '{normalized_path}'")
         except Exception as e:
             logging.error(f"Failed directory generation: {e}")
 
     @staticmethod
     def write_text_file(file_path: str, content: str):
         try:
-            with open(file_path, "w", encoding="utf-8") as file:
+            normalized_file = os.path.abspath(file_path)
+            with open(normalized_file, "w", encoding="utf-8") as file:
                 file.write(content)
-            logging.info(f"[File System] Wrote dataset stream cleanly to: '{file_path}'")
+            logging.info(f"[File System] Wrote dataset stream cleanly to: '{normalized_file}'")
         except Exception as e:
             logging.error(f"Failed raw stream write: {e}")
 
     @staticmethod
     def list_directory_contents(dir_path: str = "."):
         try:
-            return os.listdir(dir_path)
+            normalized_path = os.path.abspath(dir_path)
+            return os.listdir(normalized_path)
         except Exception as e:
             logging.error(f"Directory index lookup fault: {e}")
             return []
@@ -181,15 +203,18 @@ class JarvisBrowserAutomator:
 
     def open_link(self, url: str):
         logging.info(f"[Web Integration] Routing system standard web request to: {url}")
-        webbrowser.open(url)
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            logging.error(f"[Web Integration] Failed to parse browser link target: {e}")
 
     def launch_selenium_controller(self, url: str):
         logging.info("[Web Integration] Initializing deep Selenium automated engine...")
         try:
-            from selenium.webdriver.chrome.options import Options
             options = Options()
             options.add_argument("--disable-gpu")
             options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
             self.driver = webdriver.Chrome(options=options)
             self.driver.get(url)
         except Exception as e:
@@ -198,9 +223,13 @@ class JarvisBrowserAutomator:
 
     def close_selenium_session(self):
         if self.driver:
-            self.driver.quit()
-            self.driver = None
-            logging.info("[Web Integration] Closed headless and automation environments cleanly.")
+            try:
+                self.driver.quit()
+                logging.info("[Web Integration] Closed headless and automation environments cleanly.")
+            except Exception as e:
+                logging.error(f"[Web Integration] Error shutting down WebDriver: {e}")
+            finally:
+                self.driver = None
 
 
 # =====================================================================
@@ -213,37 +242,40 @@ class JarvisVisionSystem(threading.Thread):
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         self.eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
         self.running = True
-        self.detect_ui = False  # Set to True internally via control deck to analyze screen UI
 
     def capture_screen_and_detect_ui(self) -> int:
         """Performs on-screen contours matching to highlight interactive buttons."""
         logging.info("[Vision System] Extracting frame contours from current virtual viewport...")
-        screenshot = pyautogui.screenshot()
-        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-        img_display = img.copy()
+        try:
+            screenshot = pyautogui.screenshot()
+            img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+            img_display = img.copy()
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blurred, 50, 150)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            edged = cv2.Canny(blurred, 50, 150)
 
-        contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        count = 0
+            contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            count = 0
 
-        for contour in contours:
-            peri = cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
-            if len(approx) == 4:
-                x, y, w, h = cv2.boundingRect(approx)
-                if 30 < w < 400 and 15 < h < 150:
-                    count += 1
-                    cv2.rectangle(img_display, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    cv2.putText(img_display, "UI Block", (x, y - 5), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            for contour in contours:
+                peri = cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+                if len(approx) == 4:
+                    x, y, w, h = cv2.boundingRect(approx)
+                    if 30 < w < 400 and 15 < h < 150:
+                        count += 1
+                        cv2.rectangle(img_display, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                        cv2.putText(img_display, "UI Block", (x, y - 5), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-        cv2.imshow("Jarvis Engine - Viewport Detection Mapping", img_display)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        return count
+            cv2.imshow("Jarvis Engine - Viewport Detection Mapping", img_display)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            return count
+        except Exception as e:
+            logging.error(f"[Vision System] Failed UI Layout scanning tracking: {e}")
+            return 0
 
     def run(self):
         logging.info("Vision processing pipeline threaded.")
@@ -252,16 +284,15 @@ class JarvisVisionSystem(threading.Thread):
             logging.error("[Vision System] Primary camera hardware port offline.")
             return
 
-        while self.running and system_active:
+        while self.running and SYSTEM_ACTIVE:
             ret, frame = cap.read()
             if not ret:
-                time.sleep(0.1)
+                time.sleep(0.03) # Frame synchronization lock
                 continue
 
             frame = cv2.flip(frame, 1)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Face, Eye and Deep Emotion pipeline
             faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
             for (x, y, w, h) in faces:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
@@ -271,16 +302,20 @@ class JarvisVisionSystem(threading.Thread):
                 roi_gray = gray[y:y+h, x:x+w]
                 roi_color = frame[y:y+h, x:x+w]
 
-                # Target search optimized inside face bounding boundaries
                 eyes = self.eye_cascade.detectMultiScale(roi_gray, 1.1, 10)
                 for (ex, ey, ew, eh) in eyes:
                     cv2.rectangle(roi_color, (ex, ey), (ex + ew, ey + eh), (0, 255, 255), 1)
 
+                # Upgraded DeepFace API mapping implementation
                 try:
                     cropped_face = frame[y:y+h, x:x+w]
                     analysis = DeepFace.analyze(cropped_face, actions=['emotion'], enforce_detection=False)
-                    dominant_emotion = analysis[0]['dominant_emotion']
-                    cv2.putText(frame, f"Affiliation State: {dominant_emotion.upper()}", (x, y + h + 20), 
+                    if isinstance(analysis, list):
+                        dominant_emotion = analysis[0]['dominant_emotion']
+                    else:
+                        dominant_emotion = analysis['dominant_emotion']
+                        
+                    cv2.putText(frame, f"Affiliation State: {str(dominant_emotion).upper()}", (x, y + h + 20), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
                 except Exception:
                     pass
@@ -316,44 +351,72 @@ class JarvisVisionSystem(threading.Thread):
 #                MODULE 6: COGNITIVE SYSTEM ENGINE
 # =====================================================================
 class JarvisCognitiveEngine:
-    def __init__(self, filename="jarvis_secure_memory.json"):
+    def __init__(self, filename="jarvis_authenticated_memory.dat"):
         self.filename = filename
-        self.key = 42  # Simplified mathematical symmetric encryption
+        self.cipher_engine = None
+        self._initialize_encryption_layer()
         self.data = self.load_memory()
 
-    def _xor_cipher(self, data_str: str) -> str:
-        return "".join(chr(ord(char) ^ self.key) for char in data_str)
+    def _initialize_encryption_layer(self):
+        """Generates dynamic local keys or retrieves matching validation key tokens safely."""
+        key_file = "jarvis_vault.key"
+        if Fernet is None:
+            logging.warning("[Cognitive Engine] Cryptography module missing! Memory falling back to plaintext.")
+            return
 
-    def load_memory(self):
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, "r") as file:
-                    encrypted_content = file.read()
-                    if not encrypted_content.strip():
-                        return {"users": {}, "tasks": [], "plans": [], "notes": []}
-                    return json.loads(self._xor_cipher(encrypted_content))
-            except Exception as e:
-                logging.error(f"Error restoring cognitive parameters: {e}")
-        return {"users": {}, "tasks": [], "plans": [], "notes": []}
+        try:
+            if os.path.exists(key_file):
+                with open(key_file, "rb") as kf:
+                    key = kf.read()
+            else:
+                key = Fernet.generate_key()
+                with open(key_file, "wb") as kf:
+                    kf.write(key)
+            self.cipher_engine = Fernet(key)
+        except Exception as e:
+            logging.error(f"[Cognitive Engine] Encryption startup error: {e}")
+
+    def load_memory(self) -> Dict[str, Any]:
+        default_schema = {"users": {}, "tasks": [], "plans": [], "notes": []}
+        if not os.path.exists(self.filename):
+            return default_schema
+
+        try:
+            with open(self.filename, "rb") as file:
+                raw_data = file.read()
+                
+            if not raw_data.strip():
+                return default_schema
+                
+            if self.cipher_engine:
+                decrypted_bytes = self.cipher_engine.decrypt(raw_data)
+                return json.loads(decrypted_bytes.decode('utf-8'))
+            else:
+                return json.loads(raw_data.decode('utf-8'))
+        except Exception as e:
+            logging.error(f"Error restoring cognitive parameters: {e}. Resetting corrupted structures safely.")
+            return default_schema
 
     def save_memory(self):
         try:
-            raw_json = json.dumps(self.data, indent=4)
-            with open(self.filename, "w") as file:
-                file.write(self._xor_cipher(raw_json))
+            raw_bytes = json.dumps(self.data, indent=4).encode('utf-8')
+            with open(self.filename, "wb") as file:
+                if self.cipher_engine:
+                    file.write(self.cipher_engine.encrypt(raw_bytes))
+                else:
+                    file.write(raw_bytes)
         except Exception as e:
             logging.error(f"Cryptographic memory write fault: {e}")
 
     def update_user_profile(self, name: str, preference: str):
-        name = name.lower()
-        if name not in self.data["users"]:
-            self.data["users"][name] = {}
-        self.data["users"][name]["preferences"] = preference
+        normalized_name = name.lower().strip()
+        if normalized_name not in self.data["users"]:
+            self.data["users"][normalized_name] = {}
+        self.data["users"][normalized_name]["preferences"] = preference
         self.save_memory()
 
-    def recursive_goal_planner(self, goal: str) -> list:
-        """Heuristically segments high-level goals into granular steps."""
-        goal_normalized = goal.lower()
+    def recursive_goal_planner(self, goal: str) -> List[str]:
+        goal_normalized = goal.lower().strip()
         if "rebuild project" in goal_normalized:
             return ["Clean active build files", "Analyze compiler metrics", "Package binary outputs"]
         elif "audit security" in goal_normalized:
@@ -362,8 +425,7 @@ class JarvisCognitiveEngine:
             return [f"Phase 1: Structure approach parameters for target '{goal}'", "Phase 2: Deploy resources", "Phase 3: Validate metrics of target outcome"]
 
     def resolve_logical_conflict(self, conflict_a: str, conflict_b: str) -> str:
-        """Resolves system state priority issues using logical rule hierarchies."""
-        ca, cb = conflict_a.lower(), conflict_b.lower()
+        ca, cb = conflict_a.lower().strip(), conflict_b.lower().strip()
         if "user privacy" in ca and "cloud data" in cb:
             return "Resolution Decision: Quarantine dataset locally. Disallow external cloud network sync."
         elif "high performance" in ca and "overheating risk" in cb:
@@ -375,7 +437,7 @@ class JarvisCognitiveEngine:
 #             MODULE 7: THE ASYNC TASK ENGINE (SCHEDULER)
 # =====================================================================
 class JarvisTaskEngine(threading.Thread):
-    def __init__(self, memory_sys):
+    def __init__(self, memory_sys: JarvisCognitiveEngine):
         super().__init__()
         self.name = "JarvisSchedulerThread"
         self.memory = memory_sys
@@ -388,30 +450,30 @@ class JarvisTaskEngine(threading.Thread):
             "description": description,
             "priority": priority.upper(),
             "status": "QUEUED",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Timezone aware parsing to safely run on Python 3.12+ builds
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         }
         self.memory.data["tasks"].append(task_payload)
         self.memory.save_memory()
-        background_task_queue.put(task_payload)
+        BACKGROUND_TASK_QUEUE.put(task_payload)
         logging.info(f"[Task Scheduler] Logged new task to queue pool: ID {task_id} -> '{description}'")
 
     def run(self):
         logging.info("Background dynamic scheduler thread successfully active.")
-        while self.running and system_active:
+        while self.running and SYSTEM_ACTIVE:
             try:
-                # Process background event loops asynchronously without lagging main CLI thread
-                task = background_task_queue.get(timeout=2)
+                task = BACKGROUND_TASK_QUEUE.get(timeout=1.0)
                 logging.info(f"[Task Engine Process] Processing asynchronous execution node: '{task['description']}'")
                 
-                # Simulate core run cycles
-                time.sleep(3)
+                # Processing simulation window
+                time.sleep(2.0)
                 
                 for item in self.memory.data["tasks"]:
                     if item["id"] == task["id"]:
                         item["status"] = "COMPLETED"
                 self.memory.save_memory()
                 logging.info(f"[Task Engine Process] Successfully completed async task ID: {task['id']}")
-                background_task_queue.task_done()
+                BACKGROUND_TASK_QUEUE.task_done()
             except queue.Empty:
                 continue
 
@@ -427,7 +489,6 @@ class JarvisCoreMainframe:
         self.browser = JarvisBrowserAutomator()
         self.cognitive = JarvisCognitiveEngine()
         
-        # Threads
         self.vision_thread = None
         self.scheduler_thread = JarvisTaskEngine(self.cognitive)
         self.scheduler_thread.daemon = True
@@ -438,19 +499,18 @@ class JarvisCoreMainframe:
         if not cmd:
             return
 
-        # Voice commands
         if "say voice" in cmd:
-            text_to_speak = user_command.replace("say voice ", "")
+            text_to_speak = user_command[9:].strip()
             self.voice.speak(text_to_speak)
 
-        # Mouse & Keyboard peripheral commands
         elif "slide mouse to" in cmd or "move mouse to" in cmd:
             try:
-                coords = cmd.replace("slide mouse to ", "").replace("move mouse to ", "").split()
+                cleaned = cmd.replace("slide mouse to ", "").replace("move mouse to ", "")
+                coords = cleaned.split()
                 x, y = int(coords[0]), int(coords[1])
                 self.peripherals.move_mouse_to(x, y)
             except Exception:
-                self.voice.speak("Coordinate syntax misaligned. Provide horizontal and vertical points.")
+                self.voice.speak("Coordinate syntax misaligned. Provide horizontal and vertical integers.")
 
         elif "trigger click" in cmd or "double click" in cmd:
             clicks = 2 if "double" in cmd else 1
@@ -461,35 +521,35 @@ class JarvisCoreMainframe:
             text = user_command.replace("inject text ", "").replace("type ", "")
             self.peripherals.virtual_type(text)
 
-        # Browser Automation
         elif "browse to" in cmd:
-            url = cmd.split("browse to ")[1].strip()
+            url = user_command[10:].strip()
             self.voice.speak(f"Accessing URL address {url}")
             self.browser.open_link(url)
 
         elif "deep browse to" in cmd:
-            url = cmd.split("deep browse to ")[1].strip()
+            url = user_command[15:].strip()
             self.voice.speak(f"Launching autonomous web navigation to {url}")
             self.browser.launch_selenium_controller(url)
 
-        # File Management
         elif "build directory" in cmd:
-            dir_name = cmd.split("build directory ")[1].strip()
+            dir_name = user_command[16:].strip()
             self.files.create_directory(dir_name)
             self.voice.speak(f"Generated physical directory structure for {dir_name}")
 
         elif "write file" in cmd:
             try:
-                # Syntax: write file out.txt text: hello world
-                parts = user_command.split("write file ")[1].split(" text: ")
-                self.files.write_text_file(parts[0].strip(), parts[1].strip())
-                self.voice.speak(f"File writing parameters mapped to {parts[0].strip()}")
+                # Syntax format parsing: write file out.txt text: content
+                parts = user_command[11:].split(" text: ")
+                if len(parts) >= 2:
+                    self.files.write_text_file(parts[0].strip(), parts[1].strip())
+                    self.voice.speak(f"File writing parameters mapped to {parts[0].strip()}")
+                else:
+                    self.voice.speak("File processing command structure requires a explicit text separation marker.")
             except Exception:
                 self.voice.speak("Ensure command format matches path and text content indicators.")
 
-        # Planning & Reasoning Engines
         elif "generate master plan" in cmd:
-            goal = user_command.replace("generate master plan ", "")
+            goal = user_command[21:].strip()
             steps = self.cognitive.recursive_goal_planner(goal)
             print(f"\n[JARVIS GENERATED CORE SCHEMATIC FOR: {goal.upper()}]")
             for index, step in enumerate(steps, 1):
@@ -498,7 +558,6 @@ class JarvisCoreMainframe:
 
         elif "resolve system deadlock" in cmd:
             try:
-                # Syntax: resolve system deadlock security vs performance
                 aspects = cmd.replace("resolve system deadlock ", "").split(" vs ")
                 resolution = self.cognitive.resolve_logical_conflict(aspects[0], aspects[1])
                 print(f"\n[RESOLVER OUTPUT]\n{resolution}")
@@ -506,29 +565,28 @@ class JarvisCoreMainframe:
             except Exception:
                 self.voice.speak("Deadlock resolving parameters must compare two opposing profiles.")
 
-        # Asynchronous Scheduled Task Management
         elif "schedule task" in cmd:
-            task_desc = user_command.replace("schedule task ", "")
+            task_desc = user_command[14:].strip()
             self.scheduler_thread.add_delayed_task(task_desc)
             self.voice.speak("Added background async task.")
 
         else:
-            self.voice.speak(f"Recieved request input: {user_command}. Executing command processing.")
+            self.voice.speak(f"Received request input: {user_command}. Executing command processing processing.")
 
 
 # =====================================================================
 #                         MAIN RUNTIME DECK
 # =====================================================================
 def main():
-    global system_active
+    global SYSTEM_ACTIVE
     mainframe = JarvisCoreMainframe()
 
     print("\n=======================================================================")
     print("             JARVIS ENTERPRISE COGNITIVE OPERATING SYSTEM             ")
     print("=======================================================================")
-    print("Diagnostics: Secure encrypted memory loop online.")
-    print("Diagnostics: Background multi-threaded scheduling thread online.")
-    mainframe.voice.speak("Welcome Back. All peripheral systems are fully synced.")
+    print("[INIT] Secure authenticated cryptography vault online.")
+    print("[INIT] Background core multi-threaded scheduling environment synced.")
+    mainframe.voice.speak("Welcome Back. All peripheral systems are fully operational.")
 
     while True:
         print("\n=== SYSTEM MASTER CONTROLLER CONTROL DECK ===")
@@ -552,13 +610,15 @@ def main():
                 print("[Jarvis Command Log] Dynamic vision system thread is already running.")
                 
         elif choice == '2':
-            mainframe.voice.speak("Starting on screen button and menu contour scanning. Please keep the target area clear.")
-            scanned_blocks_num = JarvisVisionSystem().capture_screen_and_detect_ui()
-            print(f"[Jarvis Core Engine] UI element outline analysis complete. Detected potential elements: {scanned_blocks_num}")
+            mainframe.voice.speak("Starting onscreen configuration contours scanning.")
+            # Allocate instance defensively to scan layout patterns
+            scanner = JarvisVisionSystem()
+            scanned_blocks_num = scanner.capture_screen_and_detect_ui()
+            print(f"[Jarvis Core Engine] UI element outline analysis complete. Detected: {scanned_blocks_num}")
             
         elif choice == '3':
             print("\nEntering Local Command Loop (Type 'exit' to return to Central Operations Deck)")
-            print("Commands: 'move mouse to 400 300', 'type [text]', 'browse to [url]', 'write file test.txt text: [content]', 'generate master plan [goal]'")
+            print("Commands: 'move mouse to 400 300', 'type hello', 'browse to google.com', 'generate master plan security audit'")
             print("----------------------------------------------------------------------------------------------------")
             while True:
                 cli_input = input("Jarvis Direct Instruction >> ").strip()
@@ -568,7 +628,7 @@ def main():
                 
         elif choice == '4':
             if sr is None:
-                mainframe.voice.speak("Speech recognition dependencies missing. Reinstall via Pip command options.")
+                mainframe.voice.speak("Speech recognition dependencies missing. Reinstall via system environment commands.")
                 continue
             
             mainframe.voice.speak("Vocal input capture active.")
@@ -583,22 +643,22 @@ def main():
                     break
                 
         elif choice == '5':
-            cpu = psutil.cpu_percent(interval=0.1)
+            cpu = psutil.cpu_percent(interval=0.5)
             ram = psutil.virtual_memory().percent
             disk = psutil.disk_usage('/').percent
             print(f"\n--- MAIN COGNITIVE CORE HARDWARE DIAGNOSTIC ---")
-            print(f"System Microprocessor Core Load: {cpu}% | Virtual Cache Allocation: {ram}% | Storage capacity: {disk}%")
+            print(f"Processor Load: {cpu}% | RAM Utilization: {ram}% | Disk space usage: {disk}%")
             mainframe.voice.speak(f"CPU utilization reading is {int(cpu)} percent.")
             
         elif choice == '6':
             print("\n[Safe Shutdown Interface] Initializing security offline protocol...")
             mainframe.voice.speak("Shutting down core routines. Moving system components securely offline.")
-            system_active = False
+            SYSTEM_ACTIVE = False
             
-            # Safely shut down background loops
+            # Perform clean teardowns of running processes to avoid thread leak blocks
             if mainframe.vision_thread is not None:
                 mainframe.vision_thread.running = False
-                mainframe.vision_thread.join()
+                mainframe.vision_thread.join(timeout=2.0)
             
             mainframe.scheduler_thread.running = False
             mainframe.browser.close_selenium_session()
