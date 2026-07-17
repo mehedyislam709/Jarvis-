@@ -1,0 +1,13 @@
+system:
+  name: Jarvis
+  version: 1.0.0
+
+voice:
+  enabled: true
+  rate: 180
+
+screen:
+  auto_scroll: true
+
+vision:
+  face_detection: true
