@@ -1,0 +1,39 @@
+class DialogueNode:
+    def __init__(self, text, choices=None):
+        self.text = text
+        self.choices = choices if choices else {} # Maps option text -> next node key
+
+class GameDialogueEngine:
+    def __init__(self, story_graph):
+        self.graph = story_graph
+        self.current_node_key = "start"
+
+    def get_current_text(self):
+        return self.graph[self.current_node_key].text
+
+    def get_choices(self):
+        return list(self.graph[self.current_node_key].choices.keys())
+
+    def make_choice(self, choice_text):
+        node = self.graph[self.current_node_key]
+        if choice_text in node.choices:
+            self.current_node_key = node.choices[choice_text]
+            return True
+        return False
+
+# --- Defining a branching script ---
+story = {
+    "start": DialogueNode("An old wizard blocks your path. 'Answer my riddle or turn back!'", 
+                          {"Answer riddle": "riddle", "Attack him": "fight"}),
+    "riddle": DialogueNode("The wizard asks: 'What has keys but opens no locks?'", 
+                           {"A piano": "win", "A map": "lose"}),
+    "fight": DialogueNode("He turns you into a frog. Game Over.", {}),
+    "win": DialogueNode("He steps aside. 'Pass, clever traveler.'", {}),
+    "lose": DialogueNode("Wrong! He vanishes, locking you out forever.", {})
+}
+
+# --- Running the Engine ---
+engine = GameDialogueEngine(story)
+print(engine.get_current_text()) # "An old wizard..."
+engine.make_choice("Answer riddle")
+print(engine.get_current_text()) # "The wizard asks..."
