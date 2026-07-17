@@ -14,7 +14,7 @@ class JarvisVisionSystem:
         print(f"[Jarvis] Vision system initialized. Saving to: {self.output_dir}")
 
     def capture_with_mss(self):
-        """Uses mss for ultra-fast screen capture (ideal for OCR feeds)."""
+        """Uses mss for ultra-fast screen capture (ideal for OCR feeds).""" import time 
         filename = os.path.join(self.output_dir, f"mss_snapshot_{int(time.time())}.png")
         with mss.mss() as sct:
             monitor = sct.monitors[1]
