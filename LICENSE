@@ -19,3 +19,24 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+ADDITIONAL PROTECTIVE CLAUSES (SECURITY & LIABILITY STRENGTHENING)
+--------------------------------------------------------------------------------
+
+1. PATENT GRANT & TERMINATION: This license does not grant any patent rights. If 
+   any entity institutes patent litigation against the Copyright Holder alleging 
+   that the Software infringes a patent, then any patent licenses or permissions 
+   granted to that entity under this Software shall terminate automatically.
+
+2. HIGH-RISK APPLICATION EXCLUSION: The Software is not designed, authorized, 
+   or warranted for use in high-risk environments requiring fail-safe performance, 
+   including but not limited to life support systems, nuclear operations, aviation 
+   navigation, or weapon systems. The Copyright Holder explicitly disclaims any 
+   liability for damages resulting from such unauthorized deployments.
+
+3. GOVERNING LAW & JURISDICTION: Any legal action, dispute, or claim arising out 
+   of or relating to this License or the use of the Software shall be governed by 
+   and construed in accordance with the laws of Bangladesh, without giving effect 
+   to any choice of law principles. Any such dispute shall be resolved exclusively 
+   in the competent courts located in Dhaka, Bangladesh.
