@@ -1,21 +1,33 @@
+from pathlib import Path
 import yaml
 
-class Config:
+class ConfigManager:
+    def __init__(self, config_path="config/config.yaml"):
+        self.config_path = Path(config_path)
+        self.data = {}
 
-    def __init__(self, path="config/config.yaml"):
+    def load(self):
+        if not self.config_path.exists():
+            return
+        with self.config_path.open("r", encoding="utf-8") as f:
+            self.data = yaml.safe_load(f) or {}
 
-        with open(path, "r") as f:
-
-            self.data = yaml.safe_load(f)
-
-    def get(self, key):
-
-        keys = key.split(".")
-
+    def get(self, keys, default=None):
         value = self.data
-
-        for k in keys:
-
-            value = value[k]
-
+        for key in keys.split("."):
+            if not isinstance(value, dict):
+                return default
+            value = value.get(key)
+            if value is None:
+                return default
         return value
+
+    def set(self, keys, value):
+        current = self.data
+        for key in keys.split(".")[:-1]:
+            current = current.setdefault(key, {})
+        current[keys.split(".")[-1]] = value
+
+    def save(self):
+        with self.config_path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(self.data, f, sort_keys=False, allow_unicode=True)
