@@ -4,6 +4,8 @@ import json
 import time
 import logging
 import math
+import uuid
+import tempfile
 from datetime import datetime
 import numpy as np
 
@@ -35,14 +37,12 @@ class JarvisQuantumMemory:
     and cognitive reinforcement algorithms for semantic long-term memory.
     """
     def __init__(self, model_name: str = "all-MiniLM-L6-v2", db_dir: str = "jarvis_quantum_memory"):
-        self.db_dir = db_dir
-        self.metadata_path = os.path.join(db_dir, "quantum_meta.json")
-        self.index_path = os.path.join(db_dir, "quantum_faiss.bin")
+        self.db_dir = os.path.abspath(db_dir)
+        self.metadata_path = os.path.join(self.db_dir, "quantum_meta.json")
+        self.index_path = os.path.join(self.db_dir, "quantum_faiss.bin")
         
-        if not os.path.exists(self.db_dir):
-            os.makedirs(self.db_dir)
+        os.makedirs(self.db_dir, exist_ok=True)
 
-        # High-Performance Embedding Encoder
         if SEMANTIC_SUPPORT:
             logging.info(f"[Core Init] Booting sentence encoder: {model_name}")
             self.encoder = SentenceTransformer(model_name)
@@ -73,91 +73,105 @@ class JarvisQuantumMemory:
     def _build_fresh_index(self):
         self.metadata = []
         if SEMANTIC_SUPPORT:
-            # We use FlatL2 for precise Euclidean distance calculation in vector space
-            self.index = faiss.IndexFlatL2(self.dimension)
-            logging.info("[Database Vault] New High-Dimensional FAISS index established.")
+            # IndexFlatIP + Normalize vectors = Cosine Similarity (More accurate for text)
+            self.index = faiss.IndexFlatIP(self.dimension)
+            logging.info("[Database Vault] New High-Dimensional Cosine Similarity index established.")
 
     def save_vault(self):
-        """Saves current memory index files to disk securely."""
+        """Saves current memory index files to disk using Atomic Writes to prevent corruption."""
         if not SEMANTIC_SUPPORT or self.index is None:
             return
         try:
-            faiss.write_index(self.index, self.index_path)
-            with open(self.metadata_path, "w", encoding="utf-8") as f:
+            # Atomic save for FAISS Index
+            temp_index_fd, temp_index_path = tempfile.mkstemp(dir=self.db_dir)
+            os.close(temp_index_fd)
+            faiss.write_index(self.index, temp_index_path)
+            os.replace(temp_index_path, self.index_path)
+
+            # Atomic save for JSON Metadata
+            temp_meta_fd, temp_meta_path = tempfile.mkstemp(dir=self.db_dir)
+            os.close(temp_meta_fd)
+            with open(temp_meta_path, "w", encoding="utf-8") as f:
                 json.dump(self.metadata, f, indent=4, ensure_ascii=False)
-            logging.info("[Database Vault] Secured index structures synced to hard-drive storage.")
+            os.replace(temp_meta_path, self.metadata_path)
+
+            logging.info("[Database Vault] Secured index structures atomically synced to storage.")
         except Exception as e:
             logging.error(f"[Database Vault] Write-to-disk error: {e}")
 
-    def commit_memory(self, content: str, category: str = "general_cognition"):
-        """
-        Embeds a raw memory context into the vector space and attaches
-        importance metrics and temporal timestamps.
-        """
-        if not SEMANTIC_SUPPORT or self.index is None:
+    def commit_memory(self, content: str, category: str = "general_cognition", auto_save: bool = True):
+        """Embeds memory into vector space with secure normalization and dynamic ID mapping."""
+        if not SEMANTIC_SUPPORT or self.index is None or not content.strip():
             return
 
         timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Calculate high-dimensional vector embeddings
+        # Vector encoding & L2 Normalization for Cosine Similarity
         vector = self.encoder.encode([content])[0].astype('float32')
         vector_matrix = np.array([vector])
+        faiss.normalize_L2(vector_matrix)
         
         self.index.add(vector_matrix)
+        
         self.metadata.append({
-            "id": len(self.metadata),
-            "content": content,
+            "id": str(uuid.uuid4()),
+            "faiss_idx": self.index.ntotal - 1,
+            "content": content.strip(),
             "category": category,
             "timestamp": timestamp_str,
-            "reinforcement_index": 1.0  # Fresh memories start with standard cognitive strength
+            "reinforcement_index": 1.0
         })
-        self.save_vault()
-        logging.info(f"[Memory Committed] [{category}] Successfully cached: '{content[:50]}...'")
+        
+        if auto_save:
+            self.save_vault()
+        logging.info(f"[Memory Committed] [{category}] Cached: '{content[:50]}...'")
 
     def retrieve_context(self, query: str, limit: int = 3) -> list:
-        """
-        Queries the vector index for semantic matches and applies a 
-        temporal decay filter (newer memories carry higher priority).
-        """
+        """Queries the vector index and applies an optimized temporal decay filter."""
         if not SEMANTIC_SUPPORT or self.index is None or len(self.metadata) == 0:
             return []
 
-        # Vector conversion of query
         query_vector = self.encoder.encode([query])[0].astype('float32')
         query_matrix = np.array([query_vector])
+        faiss.normalize_L2(query_matrix)
 
-        # Nearest Neighbors search inside FAISS
-        distances, indices = self.index.search(query_matrix, limit)
+        # IndexFlatIP returns Inner Product (Higher is closer/more similar)
+        similarities, indices = self.index.search(query_matrix, limit)
         
         matched_memories = []
         now = datetime.now()
 
+        # Quick lookup map for FAISS index to metadata position
+        meta_map = {meta["faiss_idx"]: (pos, meta) for pos, meta in enumerate(self.metadata)}
+
         for idx, pos in enumerate(indices[0]):
-            if pos != -1 and pos < len(self.metadata):
-                meta = self.metadata[pos]
+            if pos != -1 and pos in meta_map:
+                meta_pos, meta = meta_map[pos]
                 
                 # Dynamic Decay Logic
                 mem_time = datetime.strptime(meta["timestamp"], "%Y-%m-%d %H:%M:%S")
-                time_difference_days = max((now - mem_time).days, 1)
+                time_difference_days = max((now - mem_time).days, 0) # Handle 0 days safely
                 
-                # Math decay formula: decay = original_strength / ln(days_passed + e)
+                # Logarithmic decay formula
                 decay_modifier = meta["reinforcement_index"] / math.log(time_difference_days + math.e)
-                adjusted_score = float(distances[0][idx]) * (2.0 - decay_modifier)
+                
+                # For Inner Product, we multiply by decay modifier to prioritize strong/fresh items
+                adjusted_score = float(similarities[0][idx]) * decay_modifier
 
-                # Reinforce search history (Slightly bump weight for repeatedly queried memories)
-                self.metadata[pos]["reinforcement_index"] += 0.1
+                # Reinforce search history
+                self.metadata[meta_pos]["reinforcement_index"] += 0.05
                 
                 matched_memories.append({
                     "content": meta["content"],
                     "category": meta["category"],
                     "timestamp": meta["timestamp"],
-                    "original_distance": float(distances[0][idx]),
+                    "similarity_score": float(similarities[0][idx]),
                     "decayed_score": adjusted_score
                 })
         
         self.save_vault()
-        # Sort memories to bring chronologically optimal matches first
-        matched_memories.sort(key=lambda x: x["decayed_score"])
+        # Sort descending (Higher decayed score means better/fresher match)
+        matched_memories.sort(key=lambda x: x["decayed_score"], reverse=True)
         return matched_memories
 
 
@@ -165,15 +179,12 @@ class JarvisQuantumMemory:
 #             MODULE 2: PERSONAL DOCUMENT INDEXER (RAG)
 # =====================================================================
 class QuantumDocumentIndexer:
-    """
-    RAG Pipeline: Reads local file directories, parses textual components,
-    breaks them down into semantic chunks, and indexes them into Vector Memory.
-    """
+    """RAG Pipeline with enhanced security filters and batch vector injection."""
     def __init__(self, memory_core: JarvisQuantumMemory):
         self.memory = memory_core
+        self.allowed_extensions = {'.txt', '.md', '.json', '.log'}
 
     def generate_sliding_chunks(self, text: str, chunk_size: int = 400, overlap: int = 80) -> list:
-        """Splits raw text files into overlapping segments to avoid missing context."""
         words = text.split()
         chunks = []
         for i in range(0, len(words), chunk_size - overlap):
@@ -183,24 +194,34 @@ class QuantumDocumentIndexer:
         return chunks
 
     def ingest_local_file(self, path: str):
-        """Reads file data and pushes them into Jarvis's cognitive vectors."""
-        if not os.path.exists(path):
-            logging.error(f"[RAG System] File source not found: '{path}'")
+        """Securely reads allowed files and pushes chunks in a single disk-write batch."""
+        safe_path = os.path.abspath(path)
+        if not os.path.exists(safe_path):
+            logging.error(f"[RAG System] File source not found: '{safe_path}'")
             return
 
-        filename = os.path.basename(path)
+        filename = os.path.basename(safe_path)
+        _, ext = os.path.splitext(filename)
+        
+        if ext.lower() not in self.allowed_extensions:
+            logging.error(f"[Security Warning] Blocked ingestion of unsupported file type: {ext}")
+            return
+
         try:
-            with open(path, "r", encoding="utf-8") as file:
+            with open(safe_path, "r", encoding="utf-8", errors="ignore") as file:
                 raw_data = file.read()
 
             chunks = self.generate_sliding_chunks(raw_data)
-            logging.info(f"[RAG System] Fragmented file '{filename}' into {len(chunks)} contextual nodes.")
+            logging.info(f"[RAG System] Fragmented file '{filename}' into {len(chunks)} nodes.")
 
             for index, chunk in enumerate(chunks):
                 identity_tag = f"File Source: {filename} (Node {index+1})"
                 formatted_chunk = f"[{identity_tag}] {chunk}"
-                self.memory.commit_memory(formatted_chunk, category="rag_knowledge_base")
-                
+                # Disable auto_save for batch operations to maximize I/O performance
+                self.memory.commit_memory(formatted_chunk, category="rag_knowledge_base", auto_save=False)
+            
+            # Save once after the entire batch is committed
+            self.memory.save_vault()
             logging.info(f"[RAG System] Ingestion complete. Knowledge node '{filename}' is now online.")
         except Exception as e:
             logging.error(f"[RAG System] Ingestion failure on '{filename}': {e}")
@@ -215,7 +236,6 @@ class JarvisCognitionConsole:
         self.indexer = QuantumDocumentIndexer(self.memory)
 
     def run_console(self):
-        """CLI Terminal controller running concurrently with the UI."""
         while True:
             print("\n" + "="*60)
             print("        JARVIS QUANTUM INTEGRATION COGNITIVE CORE        ")
@@ -233,7 +253,7 @@ class JarvisCognitionConsole:
                 raw_input = input("\nEnter Statement: ").strip()
                 if raw_input:
                     self.memory.commit_memory(raw_input, category="conversational_interaction")
-                    print("\n[Jarvis]: Understood. This memory has been securely stored in the database.")
+                    print("\n[Jarvis]: Understood. This memory has been securely stored.")
                     
             elif choice == '2':
                 query = input("\nQuery Search Core: ").strip()
@@ -244,18 +264,17 @@ class JarvisCognitionConsole:
                         print("No matches detected.")
                     for index, match in enumerate(results, 1):
                         print(f"\n[{index}] Timestamp: {match['timestamp']} (Decayed Score: {match['decayed_score']:.4f})")
+                        print(f"    Raw Similarity: {match['similarity_score']:.4f}")
                         print(f"    Data Content: {match['content']}")
                         
             elif choice == '3':
                 target_path = input("\nEnter local text file path: ").strip()
                 if target_path:
-                    # Self-creating sample logic for quick environment verification
                     if not os.path.exists(target_path):
                         create_prompt = input("Target path not found. Create dummy testing file? (y/n): ").strip().lower()
                         if create_prompt == 'y':
                             with open(target_path, "w", encoding="utf-8") as f:
-                                f.write("Today on Friday, July 17, 2026, the Jarvis AI completed its major architecture transition. "
-                                        "The new cognitive system now utilizes quantum vector databases.")
+                                f.write("Today on Saturday, July 18, 2026, the Jarvis AI architecture was updated successfully.")
                             print(f"[System Log] Sample testing file created at: {target_path}")
                     
                     self.indexer.ingest_local_file(target_path)
@@ -265,7 +284,7 @@ class JarvisCognitionConsole:
                 if not self.memory.metadata:
                     print("Cognitive database is empty.")
                 for entry in self.memory.metadata:
-                    print(f"[{entry['timestamp']}] [{entry['category'].upper()}] (Strength: {entry['reinforcement_index']:.1f}): {entry['content']}")
+                    print(f"[{entry['timestamp']}] [FAISS ID: {entry['faiss_idx']}] [{entry['category'].upper()}] (Strength: {entry['reinforcement_index']:.2f}): {entry['content']}")
                     
             elif choice == '5':
                 print("\nInitiating secure system shutdown...")
@@ -273,9 +292,6 @@ class JarvisCognitionConsole:
                 break
 
 
-# =====================================================================
-#                         SYSTEM MAIN START
-# =====================================================================
 if __name__ == "__main__":
     if not SEMANTIC_SUPPORT:
         sys.exit(1)
