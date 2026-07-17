@@ -1,13 +1,43 @@
+# JARVIS SYSTEM CONFIGURATION - V2.0.0
+# Warning: Do not modify unless familiar with the schema.
+
+meta:
+  version: "2.0.0"
+  schema_validation: true
+  environment: "production" # options: [development, production]
+
 system:
-  name: Jarvis
-  version: 1.0.0
+  name: "Jarvis"
+  root_dir: "./data"
+  log_level: "INFO" # options: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
 
 voice:
   enabled: true
-  rate: 180
-
-screen:
-  auto_scroll: true
+  engine: "piper" # Specified engine for modularity
+  default_profile: "female"
+  # Engine-specific settings
+  settings:
+    rate: 180
+    volume: 1.0
+    pitch: 1.0
 
 vision:
-  face_detection: true
+  enabled: true
+  model_provider: "opencv" # or "mediapipe"
+  face_detection:
+    enabled: true
+    confidence_threshold: 0.85
+    capture_frequency: 30 # Frames per second
+  object_tracking:
+    enabled: false
+
+screen:
+  enabled: true
+  auto_scroll: true
+  display_mode: "fullscreen" # [fullscreen, windowed, headless]
+  refresh_rate: 60
+
+security:
+  encryption_enabled: true
+  auto_lock_on_idle: true
+  idle_timeout_seconds: 300
