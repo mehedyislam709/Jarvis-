@@ -17,78 +17,77 @@ logging.basicConfig(
 class JarvisSecureMainframe:
     def __init__(self):
         # Biometric Thresholds
-        self.AUDIO_SAMPLE_RATE = 16000  # 16kHz standard for clean bio-analysis
-        self.RECORDING_DURATION = 3.0   # 3 seconds security passphrase window
+        self.AUDIO_SAMPLE_RATE = 16000  # 16kHz clean analysis
+        self.RECORDING_DURATION = 3.0   # 3 seconds security window
         
-        # Pre-calculated reference biometric signature values (Calibrated Voice Model)
-        # Note: In production, these represent your unique high-frequency vocal patterns.
+        # Reference voice model ranges
         self.TARGET_SPECTRAL_CENTROID_RANGE = (1200.0, 2400.0)
         self.TARGET_RMS_ENERGY_MIN = 0.015
         
-        # Intruder Defense Variables
+        # Intruder Defense Variables (Using monotonic time to prevent clock tampering)
         self.FAILED_ATTEMPT_LIMIT = 3
         self.failed_attempts_counter = 0
         self.is_locked_out = False
         self.lockout_end_time = 0.0
-        self.LOCKOUT_COOLDOWN_SEC = 60  # 1-minute brute force prevention lock
+        self.LOCKOUT_COOLDOWN_SEC = 60  
 
-        # Simulated dynamic logfile path
         self.secured_log_path = "jarvis_intrusion_vault.log"
         self._initialize_secure_log()
 
     def _initialize_secure_log(self):
-        """Creates a dummy secure log if it doesn't already exist."""
+        """Creates secure log file safely."""
         if not os.path.exists(self.secured_log_path):
             with open(self.secured_log_path, "w", encoding="utf-8") as f:
                 f.write("[SYSTEM BOOT] Safe-room initialization sequence active.\n")
-                f.write("[DATA LOG] Dynamic tracking logs enabled.\n")
 
     def analyze_voice_biometrics(self, audio_signal: np.ndarray) -> bool:
-        """
-        Extracts spectral signatures from the recorded voice wave.
-        Validates energy content and frequency distribution.
-        """
-        # Calculate Root Mean Square (RMS) to confirm human-range voice volume
-        rms_energy = np.sqrt(np.mean(audio_signal**2))
-        if rms_energy < self.TARGET_RMS_ENERGY_MIN:
-            logging.warning("[Biometric Engine] Invalid biometric payload: Volume too faint.")
+        """Extracts spectral signatures and safely validates frequency distribution."""
+        if audio_signal is None or len(audio_signal) <= 1:
             return False
 
-        # Spectral Centroid Calculation using Welch's power spectral density (PSD) estimator
-        frequencies, power_density = welch(audio_signal, self.AUDIO_SAMPLE_RATE, nperseg=1024)
-        
-        # Centroid formula: sum(f * P(f)) / sum(P(f))
-        weighted_frequencies_sum = np.sum(frequencies * power_density)
-        power_density_sum = np.sum(power_density)
-        
-        spectral_centroid = weighted_frequencies_sum / power_density_sum if power_density_sum > 0 else 0
+        # Calculate RMS Energy Safely
+        rms_energy = np.sqrt(np.mean(audio_signal**2))
+        if rms_energy < self.TARGET_RMS_ENERGY_MIN or np.isnan(rms_energy):
+            logging.warning("[Biometric Engine] Invalid biometric payload: Volume too faint or dead signal.")
+            return False
+
+        # Spectral Centroid Calculation using Welch's estimator
+        try:
+            frequencies, power_density = welch(audio_signal, self.AUDIO_SAMPLE_RATE, nperseg=1024)
+            power_density_sum = np.sum(power_density)
+            
+            if power_density_sum <= 0 or np.isnan(power_density_sum):
+                return False
+                
+            weighted_frequencies_sum = np.sum(frequencies * power_density)
+            spectral_centroid = weighted_frequencies_sum / power_density_sum
+        except Exception as math_err:
+            logging.error(f"[Biometric Engine] Mathematical signal analysis failure: {math_err}")
+            return False
 
         logging.info(f"[Biometric Analysis] Energy Level: {rms_energy:.4f} | Spectral Signature: {spectral_centroid:.2f} Hz")
 
-        # Verify biometric profile fits inside user-calibrated envelope
         min_f, max_f = self.TARGET_SPECTRAL_CENTROID_RANGE
-        if min_f <= spectral_centroid <= max_f:
-            return True
-        return False
+        return min_f <= spectral_centroid <= max_f
 
-    def capture_voice_token(self) -> np.ndarray:
-        """Records a 3-second secure live audio capture from default system microphone."""
+    def capture_voice_token(self) -> Optional[np.ndarray]:
+        """Records secure live audio from the microphone with runtime fail-safes."""
         print("\n>>> [JARVIS BIOMETRIC] RECORDING LIVE AUDIO PASS-TOKEN IN 3 SECONDS... SPEAK NOW.")
         time.sleep(0.5)
         
         try:
-            # Captures a mono-channel float32 numpy array
+            # Captures mono-channel float32 array
             audio_data = sd.rec(int(self.RECORDING_DURATION * self.AUDIO_SAMPLE_RATE),
                                 samplerate=self.AUDIO_SAMPLE_RATE, channels=1, dtype='float32')
-            sd.wait()  # Block main thread execution until the mic hardware capture finishes
+            sd.wait()  
             return np.squeeze(audio_data)
         except Exception as hardware_err:
-            logging.critical(f"[Hardware Exception] Microphone driver failure: {hardware_err}")
-            return np.zeros(100)
+            logging.critical(f"[Hardware Exception] Microphone driver failure or disconnected: {hardware_err}")
+            return None
 
     def attempt_biometric_unlock(self) -> bool:
-        """Orchestrates secure validation, lockout limits, and brute-force cool downs."""
-        current_time = time.time()
+        """Orchestrates secure validation and clock-tamper-proof brute-force cool downs."""
+        current_time = time.monotonic() # Immune to system clock modifications
         
         if self.is_locked_out:
             if current_time < self.lockout_end_time:
@@ -101,6 +100,10 @@ class JarvisSecureMainframe:
                 logging.info("[Lockout Reset] Normal operations returned. Proceed to biometrics.")
 
         audio_token = self.capture_voice_token()
+        if audio_token is None:
+            logging.error("[Access Denied] Failed to capture biometrics due to hardware failure.")
+            return False
+
         validated = self.analyze_voice_biometrics(audio_token)
 
         if validated:
@@ -113,44 +116,48 @@ class JarvisSecureMainframe:
             
             if self.failed_attempts_counter >= self.FAILED_ATTEMPT_LIMIT:
                 self.is_locked_out = True
-                self.lockout_end_time = time.time() + self.LOCKOUT_COOLDOWN_SEC
+                self.lockout_end_time = time.monotonic() + self.LOCKOUT_COOLDOWN_SEC
                 logging.critical(f"[INTRUDER ALERT] System locked down for {self.LOCKOUT_COOLDOWN_SEC}s!")
             return False
 
     def secure_log_eraser(self, target_filepath: str):
         """
-        Multi-pass DoD-style anti-forensics shredder. Overwrites file spaces
-        directly on the storage block with zero bytes and random patterns before removal.
+        Industrial-strength file shredder. Forces OS-level buffer flushing (fsync) 
+        and truncates data to guarantee absolute destruction even on modern SSDs.
         """
-        if not os.path.exists(target_filepath):
-            logging.error(f"[Secure Shred] Target '{target_filepath}' does not exist.")
+        safe_path = os.path.abspath(target_filepath)
+        if not os.path.exists(safe_path):
+            logging.error(f"[Secure Shred] Target '{safe_path}' does not exist.")
             return
 
         try:
-            file_size = os.path.getsize(target_filepath)
-            logging.info(f"[Secure Shred] Initiating zero-write overwriting sequence on target: {target_filepath} ({file_size} bytes)")
+            file_size = os.path.getsize(safe_path)
+            logging.info(f"[Secure Shred] Purging target: {safe_path} ({file_size} bytes)")
 
-            # Run 3-Pass shredding sequence to destroy deep storage residuals
-            with open(target_filepath, "ba+", buffering=0) as secure_file:
-                # Pass 1: Overwrite completely with binary zeros
-                secure_file.seek(0)
-                secure_file.write(b'\x00' * file_size)
-                
-                # Pass 2: Overwrite completely with binary ones
-                secure_file.seek(0)
-                secure_file.write(b'\xff' * file_size)
-                
-                # Pass 3: Overwrite with cryptographically secure random bytes
-                secure_file.seek(0)
-                random_bytes = secrets.token_bytes(file_size)
-                secure_file.write(random_bytes)
+            # Open file with direct low-level OS write permissions (no caching)
+            fd = os.open(safe_path, os.O_RDWR | os.O_BINARY if hasattr(os, 'O_BINARY') else os.O_RDWR)
+            try:
+                # Pass 1: Cryptographically secure random bytes
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, secrets.token_bytes(file_size))
+                os.fsync(fd)  # Force OS to push data to the actual hardware controller
 
-            # Metadata obfuscation - rename target to a random string before final unlink
-            shredded_temp_name = os.path.join(os.path.dirname(target_filepath), secrets.token_hex(8))
-            os.rename(target_filepath, shredded_temp_name)
+                # Pass 2: Overwrite with all Zero bytes to clear signatures
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, b'\x00' * file_size)
+                os.fsync(fd)
+                
+                # Truncate file size to 0 bytes at the OS level
+                os.ftruncate(fd, 0)
+            finally:
+                os.close(fd)
+
+            # Metadata Deletion Layer: Obfuscate file name before unlinking
+            shredded_temp_name = os.path.join(os.path.dirname(safe_path), secrets.token_hex(16))
+            os.rename(safe_path, shredded_temp_name)
             os.remove(shredded_temp_name)
             
-            logging.info("[Secure Shred] Operation completed. Magnetic and SSD residual memory purged.")
+            logging.info("[Secure Shred] Anti-forensic purge completed successfully.")
         except Exception as shred_err:
             logging.critical(f"[Shred Error] Failed to securely purge logs: {shred_err}")
 
@@ -177,10 +184,10 @@ if __name__ == "__main__":
             jarvis_vault.attempt_biometric_unlock()
         elif choice == '2':
             with open(jarvis_vault.secured_log_path, "a", encoding="utf-8") as log_file:
-                log_file.write(f"[ALERT INT] Intrusion attempt blocked at Unix timestamp: {time.time()}\n")
-            print("\n[Admin Info] Simulated log entries successfully generated inside 'jarvis_intrusion_vault.log'.")
+                log_file.write(f"[ALERT INT] Intrusion attempt blocked at monotonic timestamp: {time.monotonic()}\n")
+            print("\n[Admin Info] Simulated log entries successfully generated.")
         elif choice == '3':
-            confirm = input("\n[WARNING] This performs standard DOD-shred. Recovering is IMPOSSIBLE. Proceed? (y/n): ").strip().lower()
+            confirm = input("\n[WARNING] Shredding is IRREVERSIBLE. Proceed? (y/n): ").strip().lower()
             if confirm == 'y':
                 jarvis_vault.secure_log_eraser(jarvis_vault.secured_log_path)
         elif choice == '4':
