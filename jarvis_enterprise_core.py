@@ -24,8 +24,7 @@ logging.basicConfig(
     ]
 )
 
-# Global variables and thread-safe queues
-vision_queue = queue.Queue()
+# জেনুইন মাল্টি-থ্রেডিং সিঙ্ক্রোনাইজেশন ভ্যারিয়েবল
 system_active = True
 
 # =====================================================================
@@ -34,97 +33,88 @@ system_active = True
 class JarvisMemory:
     def __init__(self, filename="jarvis_secure_memory.json"):
         self.filename = filename
-        self.key = 42  # XOR encryption key simulation for secure data
+        self.key = 42  
+        self.lock = threading.Lock() # মাল্টি-থ্রেড রাইটিং প্রটেকশন
         self.data = self.load_memory()
 
     def _xor_cipher(self, data_str: str) -> str:
-        """Applies simple mathematical XOR encryption to secure stored memory."""
         return "".join(chr(ord(char) ^ self.key) for char in data_str)
 
     def load_memory(self):
+        default_structure = {"users": {}, "tasks": [], "plans": [], "notes": []}
         if os.path.exists(self.filename):
             try:
-                with open(self.filename, "r") as file:
+                with open(self.filename, "r", encoding="utf-8") as file:
                     encrypted_content = file.read()
                     if not encrypted_content.strip():
-                        return {"users": {}, "tasks": [], "plans": [], "notes": []}
+                        return default_structure
                     decrypted_json = self._xor_cipher(encrypted_content)
                     return json.loads(decrypted_json)
             except Exception as e:
-                logging.error(f"Error loading secure memory: {e}")
-                return {"users": {}, "tasks": [], "plans": [], "notes": []}
-        return {"users": {}, "tasks": [], "plans": [], "notes": []}
+                logging.error(f"Error loading secure memory, resetting structure: {e}")
+                return default_structure
+        return default_structure
 
     def save_memory(self):
-        try:
-            raw_json = json.dumps(self.data, indent=4)
-            encrypted_json = self._xor_cipher(raw_json)
-            with open(self.filename, "w") as file:
-                file.write(encrypted_json)
-        except Exception as e:
-            logging.error(f"Failed to write memory securely: {e}")
+        with self.lock: # রেস কন্ডিশন এড়ানোর জন্য লক ব্যবহার
+            try:
+                raw_json = json.dumps(self.data, indent=4)
+                encrypted_json = self._xor_cipher(raw_json)
+                with open(self.filename, "w", encoding="utf-8") as file:
+                    file.write(encrypted_json)
+            except Exception as e:
+                logging.error(f"Failed to write memory securely: {e}")
 
     def update_user_profile(self, username, trait, value):
-        username = username.lower()
+        username = username.lower().strip()
+        if not username:
+            return
         if username not in self.data["users"]:
             self.data["users"][username] = {}
         self.data["users"][username][trait] = value
         self.save_memory()
-        logging.info(f"Memory updated: Associated {trait} -> {value} with user '{username}'")
+        logging.info(f"Memory updated: {trait} -> {value} for user '{username}'")
 
 
 # =====================================================================
 #                 COGNITIVE ENGINE: RECURSIVE PLANNING
 # =====================================================================
 class JarvisPlanningEngine:
-    """
-    Simulates recursive subgoal decomposition. It breaks down any 
-    complex goal down to single executable action items.
-    """
     def decompose_goal(self, goal: str) -> list:
         logging.info(f"Decomposing macro goal: '{goal}'")
-        subtasks = []
-        
-        # Simulated recursive rules engine
-        if "deploy software" in goal.lower():
-            subtasks = [
+        g_low = goal.lower()
+        if "deploy software" in g_low:
+            return [
                 "Verify dependencies and configurations",
                 "Run unit test suite recursively",
                 "Compile production-ready packages",
                 "Execute server deployment script"
             ]
-        elif "analyze system health" in goal.lower():
-            subtasks = [
+        elif "analyze system health" in g_low:
+            return [
                 "Read CPU/RAM diagnostic bounds",
                 "Scan active system log files for critical warnings",
                 "Check network socket loopbacks"
             ]
-        else:
-            subtasks = [
-                f"Initialize target definition phase for '{goal}'",
-                "Execute sequence execution steps",
-                "Assess target completion indicators"
-            ]
-        return subtasks
+        return [
+            f"Initialize target definition phase for '{goal}'",
+            "Execute sequence execution steps",
+            "Assess target completion indicators"
+        ]
 
 
 # =====================================================================
 #                COGNITIVE ENGINE: LOGICAL REASONING
 # =====================================================================
 class JarvisReasoningEngine:
-    """
-    Executes rule-based logical deductions and mitigates conflicting parameters.
-    """
-    def resolve_constraints(self, constraint_a: str, constraint_b: str):
+    def resolve_constraints(self, constraint_a: str, constraint_b: str) -> str:
         logging.info(f"Parsing logical conflicts: [{constraint_a}] vs [{constraint_b}]")
-        
-        # Conflict matrix solver
-        if "max performance" in constraint_a.lower() and "low power" in constraint_b.lower():
+        ca, cb = constraint_a.lower(), constraint_b.lower()
+        if "max performance" in ca and "low power" in cb:
             return "Resolution: Throttle CPU to 75% load capacity; balance core distribution dynamically."
-        elif "high privacy" in constraint_a.lower() and "cloud integration" in constraint_b.lower():
+        elif "high privacy" in ca and "cloud integration" in cb:
             return "Resolution: Restrict cloud output. Route queries through local secure hash pipelines."
-        else:
-            return f"Resolution: Prioritize local execution parameters over remote hooks."
+        return "Resolution: Prioritize local execution parameters over remote hooks."
 
 
 # =====================================================================
@@ -163,101 +153,105 @@ class JarvisTaskEngine:
 class JarvisDiagnostics:
     @staticmethod
     def get_hardware_status():
-        cpu_usage = psutil.cpu_percent(interval=0.1)
-        ram_usage = psutil.virtual_memory().percent
-        disk_usage = psutil.disk_usage('/').percent
         return {
-            "cpu_percent": cpu_usage,
-            "ram_percent": ram_usage,
-            "disk_percent": disk_usage
+            "cpu_percent": psutil.cpu_percent(interval=None), # Non-blocking UI
+            "ram_percent": psutil.virtual_memory().percent,
+            "disk_percent": psutil.disk_usage('/').percent
         }
 
 
 # =====================================================================
 #                       ADVANCED VISION MODULE
 # =====================================================================
-class JarvisVisionSystem(threading.Thread):
+class JarvisVisionSystem:
     def __init__(self):
-        super().__init__()
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         self.eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+        self.running = False
+        self.cap = None
+        self.emotion_label = "Analyzing..."
+        self.last_emotion_check = 0
+        self.emotion_interval = 2.0  # প্রতি ২ সেকেন্ড পর পর ইমোশন অ্যানালাইসিস হবে (CPU সেভার)
+
+    def start_capture(self):
+        self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            logging.error("Failed to map target camera index.")
+            return False
         self.running = True
+        logging.info("Vision Pipeline Successfully Triggered.")
+        return True
 
-    def calculate_distance(self, p1, p2) -> float:
-        """
-        Calculates the Euclidean distance between two spatial points.
-        Mathematical formula applied:
-        $d = \sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}$
-        """
-        return float(np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2))
+    def process_frame(self):
+        """মেইন লুপ থেকে কল করার উপযোগী ফ্রেম প্রসেসর"""
+        if not self.running or self.cap is None:
+            return False
 
-    def run(self):
-        logging.info("Vision Core Thread successfully launched.")
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            logging.error("Failed to map target camera index. Vision engine is offline.")
-            return
+        ret, frame = self.cap.read()
+        if not ret:
+            return True
 
-        while self.running and system_active:
-            ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.1)
-                continue
+        frame = cv2.flip(frame, 1)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        current_time = time.time()
+        
+        # ১. ফেস ডিটেকশন
+        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+        for (x, y, w, h) in faces:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            cv2.putText(frame, "Target Located", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
-            frame = cv2.flip(frame, 1)
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            # 1. Face Detection
-            faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
-            for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-                cv2.putText(frame, "Target Located", (x, y - 10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+            roi_gray = gray[y:y+h, x:x+w]
+            roi_color = frame[y:y+h, x:x+w]
 
-                roi_gray = gray[y:y+h, x:x+w]
-                roi_color = frame[y:y+h, x:x+w]
+            # ২. আই ট্র্যাকিং
+            eyes = self.eye_cascade.detectMultiScale(roi_gray, 1.1, 10)
+            for (ex, ey, ew, eh) in eyes:
+                cv2.rectangle(roi_color, (ex, ey), (ex + ew, ey + eh), (0, 255, 255), 1)
 
-                # 2. Eye Tracking Inside Face Bounds
-                eyes = self.eye_cascade.detectMultiScale(roi_gray, 1.1, 10)
-                for (ex, ey, ew, eh) in eyes:
-                    cv2.rectangle(roi_color, (ex, ey), (ex + ew, ey + eh), (0, 255, 255), 1)
-
-                # 3. Emotion Recognition
+            # ৩. থ্রটলড ইমোশন রিকগনিশন (CPU প্রটেকশন মডিউল)
+            if current_time - self.last_emotion_check > self.emotion_interval:
                 try:
                     cropped_face = frame[y:y+h, x:x+w]
-                    analysis = DeepFace.analyze(cropped_face, actions=['emotion'], enforce_detection=False)
-                    dominant_emotion = analysis[0]['dominant_emotion']
-                    cv2.putText(frame, f"State: {dominant_emotion.upper()}", (x, y + h + 20), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                    # মডেল সাইজ ছোট রাখার জন্য এবং ক্রাশ এড়াতে enforce_detection=False
+                    analysis = DeepFace.analyze(cropped_face, actions=['emotion'], enforce_detection=False, silent=True)
+                    self.emotion_label = analysis[0]['dominant_emotion'].upper()
+                    self.last_emotion_check = current_time
                 except Exception:
                     pass
+            
+            cv2.putText(frame, f"State: {self.emotion_label}", (x, y + h + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-            # 4. Hand Gestures via Skin segmentation and Convex Hull
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            lower_skin = np.array([0, 20, 70], dtype=np.uint8)
-            upper_skin = np.array([20, 255, 255], dtype=np.uint8)
-            mask = cv2.inRange(hsv, lower_skin, upper_skin)
-            mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
-            mask = cv2.GaussianBlur(mask, (5, 5), 100)
+        # ৪. স্কিন সেগমেন্টেশন এবং হ্যান্ড জেসচার
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_skin = np.array([0, 20, 70], dtype=np.uint8)
+        upper_skin = np.array([20, 255, 255], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower_skin, upper_skin)
+        mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
+        mask = cv2.GaussianBlur(mask, (5, 5), 100)
 
-            contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                if cv2.contourArea(largest) > 12000:
-                    hull = cv2.convexHull(largest)
-                    cv2.drawContours(frame, [largest], -1, (0, 255, 0), 1)
-                    cv2.drawContours(frame, [hull], -1, (0, 0, 255), 1)
-                    cv2.putText(frame, "Gesture Area Tracked", (10, 30), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            if cv2.contourArea(largest) > 12000:
+                hull = cv2.convexHull(largest)
+                cv2.drawContours(frame, [largest], -1, (0, 255, 0), 1)
+                cv2.drawContours(frame, [hull], -1, (0, 0, 255), 1)
+                cv2.putText(frame, "Gesture Area Tracked", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-            # Output view render loop
-            cv2.imshow("Jarvis Vision Module", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+        # মেইন থ্রেড GUI রেন্ডারিং
+        cv2.imshow("Jarvis Vision Module", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            return False
+        return True
 
-        cap.release()
+    def stop_capture(self):
+        self.running = False
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
         cv2.destroyAllWindows()
-        logging.info("Vision Core Thread stopped.")
+        logging.info("Vision Engine Securely Disengaged.")
 
 
 # =====================================================================
@@ -276,22 +270,19 @@ class JarvisNLPParser:
             return
 
         if "remember" in text:
-            # Example: remember Alice prefers dark mode
             parts = text.replace("remember ", "").split(" prefers ")
             if len(parts) == 2:
                 self.memory.update_user_profile(parts[0], "preference", parts[1])
                 print(f"[Jarvis] Fact stored for {parts[0]}.")
             else:
-                print("[Jarvis] Command parsing failed. Use: 'remember [name] prefers [preference]'")
+                print("[Jarvis] Syntax Error. Use: 'remember [name] prefers [preference]'")
 
         elif "schedule" in text or "task" in text:
-            # Example: task update production server
             task_desc = text.replace("task ", "").replace("schedule ", "")
             self.tasks.register_task(task_desc, "HIGH")
             print(f"[Jarvis] Task safely registered under scheduler queue.")
 
         elif "plan" in text:
-            # Example: plan deploy software
             goal = text.replace("plan ", "")
             subtasks = self.planning.decompose_goal(goal)
             print(f"\n[Plan Constructed for: {goal}]")
@@ -299,13 +290,11 @@ class JarvisNLPParser:
                 print(f"  Step {idx}: {st}")
 
         elif "resolve" in text:
-            # Example: resolve max performance low power
             inputs = text.replace("resolve ", "").split(" vs ")
             if len(inputs) == 2:
                 res = self.reasoning.resolve_constraints(inputs[0], inputs[1])
                 print(f"\n[Reasoning Output]\n{res}")
             else:
-                # Fallback for simple conflict analysis
                 res = self.reasoning.resolve_constraints(text.replace("resolve ", ""), "low power")
                 print(f"\n[Reasoning Output]\n{res}")
 
@@ -315,9 +304,8 @@ class JarvisNLPParser:
             print(f"CPU Utilization: {metrics['cpu_percent']}%")
             print(f"Memory Alloc:    {metrics['ram_percent']}%")
             print(f"Primary Disk:    {metrics['disk_percent']}%")
-
         else:
-            print(f"[Jarvis Logic] System received: '{raw_input}'. Processing with standard intent handler...")
+            print(f"[Jarvis Logic] Unrecognized intent pipeline: '{raw_input}'")
 
 
 # =====================================================================
@@ -326,22 +314,20 @@ class JarvisNLPParser:
 def main():
     global system_active
     
-    # Instantiate all engines
     memory_system = JarvisMemory()
     task_system = JarvisTaskEngine(memory_system)
     reasoning_system = JarvisReasoningEngine()
     planning_system = JarvisPlanningEngine()
-    
     nlp_system = JarvisNLPParser(memory_system, task_system, reasoning_system, planning_system)
     
-    vision_thread = None
+    vision_system = JarvisVisionSystem()
 
     print("\n=======================================================")
     print("        JARVIS ENTERPRISE COGNITIVE CO-PROCESSOR       ")
     print("=======================================================")
     print("Welcome back, Agent. Core systems online.")
 
-    while True:
+    while system_active:
         print("\n--- Command Console Options ---")
         print("1. Launch Vision Processing Pipeline (Face/Eye/Gestures/Emotions)")
         print("2. Enter Natural Language Interface (NLP Command Loop)")
@@ -353,11 +339,15 @@ def main():
         choice = input("Initiate action (1-5): ").strip()
         
         if choice == '1':
-            if vision_thread is None or not vision_thread.is_alive():
-                vision_thread = JarvisVisionSystem()
-                vision_thread.daemon = True
-                vision_thread.start()
-                print("[Jarvis] Camera stream thread successfully spawned.")
+            if not vision_system.running:
+                if vision_system.start_capture():
+                    print("[Jarvis] Stream active. Press 'q' inside the video window to return to console.")
+                    # OpenCV GUI Loop টিকে মেইন থ্রেডে পুশ করা হলো ক্রাশ এড়াতে
+                    while vision_system.running:
+                        keep_running = vision_system.process_frame()
+                        if not keep_running:
+                            vision_system.stop_capture()
+                            break
             else:
                 print("[Jarvis Alert] Camera pipeline already active.")
                 
@@ -380,9 +370,7 @@ def main():
         elif choice == '5':
             print("\n[Jarvis Engine] Safely closing down subroutines...")
             system_active = False
-            if vision_thread is not None:
-                vision_thread.running = False
-                vision_thread.join()
+            vision_system.stop_capture()
             print("System is securely offline. Goodbye!")
             break
         else:
