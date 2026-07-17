@@ -1,0 +1,16 @@
+OpenCV-python
+Mediapipe
+NumPy
+Pillow
+PyAutoGUI
+PyTesseract
+Pyttsx3
+SpeechRecognition
+PyAudio
+Transformers
+Torch
+LangChain
+ChromaDB
+FastAPI
+Uvicorn
+python-dotenv
