@@ -1,0 +1,21 @@
+voice:
+  default: female
+
+  profiles:
+    male:
+      enabled: true
+      engine: piper
+      voice: en_US-ryan-medium
+      language: en-US
+      speed: 1.0
+      pitch: 1.0
+      volume: 1.0
+
+    female:
+      enabled: true
+      engine: piper
+      voice: en_US-amy-medium
+      language: en-US
+      speed: 1.0
+      pitch: 1.0
+      volume: 1.0
