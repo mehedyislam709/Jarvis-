@@ -1,21 +1,38 @@
+# JARVIS Voice Configuration Engine
+# Strict schema enforcement recommended for production.
+
 voice:
   default: female
+  
+  # Global constraints to prevent engine crashes
+  constraints:
+    max_speed: 2.0
+    min_speed: 0.5
+    max_volume: 1.0
+    min_volume: 0.0
 
   profiles:
     male:
       enabled: true
-      engine: piper
-      voice: en_US-ryan-medium
-      language: en-US
+      engine: "piper"
+      model_path: "en_US-ryan-medium.onnx"
+      config_path: "en_US-ryan-medium.onnx.json"
+      language: "en-US"
       speed: 1.0
       pitch: 1.0
-      volume: 1.0
+      volume: 0.9
+      # Added metadata for better UI/system recognition
+      display_name: "Ryan"
+      gender: "male"
 
     female:
       enabled: true
-      engine: piper
-      voice: en_US-amy-medium
-      language: en-US
+      engine: "piper"
+      model_path: "en_US-amy-medium.onnx"
+      config_path: "en_US-amy-medium.onnx.json"
+      language: "en-US"
       speed: 1.0
       pitch: 1.0
       volume: 1.0
+      display_name: "Amy"
+      gender: "female"
