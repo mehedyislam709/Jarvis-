@@ -1,39 +1,62 @@
-class DialogueNode:
-    def __init__(self, text, choices=None):
-        self.text = text
-        self.choices = choices if choices else {} # Maps option text -> next node key
+import os
+import time
+from PIL import ImageGrab
+import mss
+import mss.tools
 
-class GameDialogueEngine:
-    def __init__(self, story_graph):
-        self.graph = story_graph
-        self.current_node_key = "start"
+class JarvisScreenCapturer:
+    def __init__(self, output_dir="jarvis_captures"):
+        """Initializes the Jarvis Screen Capture system."""
+        self.output_dir = output_dir
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        print(f"[Jarvis] Screen capture system initialized. Saving to: {self.output_dir}")
 
-    def get_current_text(self):
-        return self.graph[self.current_node_key].text
+    def capture_with_pillow(self):
+        """
+        Uses Pillow (ImageGrab) to take a standard screenshot of the entire screen.
+        Best for general, non-urgent captures.
+        """
+        print("[Jarvis] Capturing standard screenshot using Pillow...")
+        filename = os.path.join(self.output_dir, f"pillow_snapshot_{int(time.time())}.png")
+        
+        # Grab the entire screen
+        screenshot = ImageGrab.grab()
+        screenshot.save(filename)
+        
+        print(f"[Jarvis] Screenshot successfully saved: {filename}")
+        return filename
 
-    def get_choices(self):
-        return list(self.graph[self.current_node_key].choices.keys())
+    def capture_with_mss(self):
+        """
+        Uses the mss library for high-performance, ultra-fast screen capture.
+        Ideal for real-time analysis, games, or high-frame-rate requirements.
+        """
+        print("[Jarvis] Capturing high-speed screenshot using mss...")
+        filename = os.path.join(self.output_dir, f"mss_snapshot_{int(time.time())}.png")
+        
+        with mss.mss() as sct:
+            # Select the primary monitor (Monitor 1)
+            monitor = sct.monitors[1]
+            
+            # Fast screen grab
+            sct_img = sct.grab(monitor)
+            
+            # Convert to PNG and save
+            mss.tools.to_png(sct_img.rgb, sct_img.size, output=filename)
+            
+        print(f"[Jarvis] High-speed screenshot successfully saved: {filename}")
+        return filename
 
-    def make_choice(self, choice_text):
-        node = self.graph[self.current_node_key]
-        if choice_text in node.choices:
-            self.current_node_key = node.choices[choice_text]
-            return True
-        return False
-
-# --- Defining a branching script ---
-story = {
-    "start": DialogueNode("An old wizard blocks your path. 'Answer my riddle or turn back!'", 
-                          {"Answer riddle": "riddle", "Attack him": "fight"}),
-    "riddle": DialogueNode("The wizard asks: 'What has keys but opens no locks?'", 
-                           {"A piano": "win", "A map": "lose"}),
-    "fight": DialogueNode("He turns you into a frog. Game Over.", {}),
-    "win": DialogueNode("He steps aside. 'Pass, clever traveler.'", {}),
-    "lose": DialogueNode("Wrong! He vanishes, locking you out forever.", {})
-}
-
-# --- Running the Engine ---
-engine = GameDialogueEngine(story)
-print(engine.get_current_text()) # "An old wizard..."
-engine.make_choice("Answer riddle")
-print(engine.get_current_text()) # "The wizard asks..."
+# Execution Example
+if __name__ == "__main__":
+    # Create the Jarvis capture object
+    jarvis_cam = JarvisScreenCapturer()
+    
+    # Method 1: Standard Pillow Capture
+    jarvis_cam.capture_with_pillow()
+    
+    time.sleep(1) # Brief pause
+    
+    # Method 2: High-Performance mss Capture
+    jarvis_cam.capture_with_mss()
