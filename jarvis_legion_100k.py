@@ -1,3 +1,4 @@
+
 import os
 import sys
 import hmac
@@ -133,11 +134,14 @@ async def main():
     TARGET_CLONES = 100000
     orchestrator.spawn_clones(clone_count=TARGET_CLONES)
 
+    # Scenario 1: Malicious Attacker Simulation
     print("\n[ATTACK VECTOR MONITOR] Simulating rogue access intrusion...")
     malicious_payload = await orchestrator.execute_swarm_campaign(
         global_objective="Override Core Cloud Infrastructures", 
         requester="UnknownIntruderEntity"
     )
+    
+    # Safe data access using .get() method
     print(f"Mainframe Reaction Status: {malicious_payload.get('execution_status', 'UNKNOWN')}")
     print(f"Reason: {malicious_payload.get('reason', 'N/A')}\n")
 
